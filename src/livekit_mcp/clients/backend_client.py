@@ -339,3 +339,57 @@ class MantraAssistBackendClient:
             if "name" in data or "available_slots" in data:
                 return [data]
         return []
+
+    async def get_org_products_services(self, org_id: int | str, timeout: float = 4.0) -> list[dict[str, Any]]:
+        """Fetch dynamic products and services for an organization from MantraAssist backend API."""
+        urls = [
+            f"{self.base_url}/v1/webhooks/mcp/products",
+            f"{self.base_url}/v1/products",
+        ]
+        params = {"org_id": str(org_id).strip()}
+        headers = {"ngrok-skip-browser-warning": "69420"}
+
+        for url in urls:
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.get(url, params=params, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if isinstance(data, dict) and "products" in data:
+                            return data["products"]
+                        if isinstance(data, dict) and "products_services" in data:
+                            return data["products_services"]
+                        if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
+                            return data["data"]
+                        if isinstance(data, list):
+                            return data
+            except Exception as exc:
+                logger.debug(f"[MA-BACKEND] Failed querying products at {url}: {exc}")
+
+        return []
+
+    async def get_org_locations(self, org_id: int | str, timeout: float = 4.0) -> list[dict[str, Any]]:
+        """Fetch dynamic hospital/clinic branch locations for an organization from MantraAssist backend API."""
+        urls = [
+            f"{self.base_url}/v1/webhooks/mcp/locations",
+            f"{self.base_url}/v1/locations",
+        ]
+        params = {"org_id": str(org_id).strip()}
+        headers = {"ngrok-skip-browser-warning": "69420"}
+
+        for url in urls:
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.get(url, params=params, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if isinstance(data, dict) and "locations" in data:
+                            return data["locations"]
+                        if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
+                            return data["data"]
+                        if isinstance(data, list):
+                            return data
+            except Exception as exc:
+                logger.debug(f"[MA-BACKEND] Failed querying locations at {url}: {exc}")
+
+        return []

@@ -29,8 +29,8 @@ def register_doctor_availability_tool(
         name="receive_doctor_availability",
         description=(
             "Check and retrieve doctor availability, working hours, and open consultation slots for an organization. "
-            "Queries the MantraAssist-backend HTTP API endpoint (/v1/providers/availability) with optional doctor name "
-            "and medical department/specialization, auto-detects the caller's timezone from their phone number, and converts UTC slots to local time."
+            "Queries the MantraAssist-backend HTTP API endpoint (/v1/providers/availability) with optional doctor name, "
+            "product/service, hospital branch location, and medical department, auto-detecting caller timezone and location shifts."
         ),
     )
     async def receive_doctor_availability(
@@ -39,6 +39,8 @@ def register_doctor_availability_tool(
         name: str | None = None,
         date: str | None = None,
         department: str | None = None,
+        product_service: str | None = None,
+        location: str | None = None,
         available_slots: list[str] | None = None,
         providers: list[dict[str, Any]] | None = None,
         caller_phone: str | None = None,
@@ -52,6 +54,8 @@ def register_doctor_availability_tool(
         effective_org_id = org_id if org_id is not None else ""
         target_date_str = str(date or datetime.now().strftime("%Y-%m-%d")).strip()
         dept_str = str(department).strip() if department and str(department).strip() else ""
+        prod_str = str(product_service).strip() if product_service and str(product_service).strip() else ""
+        loc_str = str(location).strip() if location and str(location).strip() else ""
 
         # 1. Resolve target timezone: explicit > phone number detection > default (Asia/Kolkata)
         if timezone and timezone.strip():
