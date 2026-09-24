@@ -20,7 +20,6 @@ from livekit_mcp.tools.appointments import register_appointment_tool
 from livekit_mcp.tools.client_recognition import register_client_recognition_tool
 from livekit_mcp.tools.doctor_availability import register_doctor_availability_tool
 from livekit_mcp.tools.org_processes import register_org_processes_tool
-from livekit_mcp.tools.products_services import register_products_services_tools
 from livekit_mcp.tools.providers import register_provider_tools
 from livekit_mcp.utils.db_logger import save_mcp_event
 
@@ -47,7 +46,7 @@ def create_mcp_server(settings: Settings | None = None) -> FastMCP:
         instructions=(
             "LiveKit MCP Server provides tools to interact with the MantraCare "
             "voice agent engine, telephony trunks, call logs, knowledge base, "
-            "organization processes & stages, products & services, nearest location calculation, and healthcare provider availability schedules."
+            "organization processes & stages, and healthcare provider availability schedules."
         ),
     )
 
@@ -57,7 +56,6 @@ def create_mcp_server(settings: Settings | None = None) -> FastMCP:
     register_doctor_availability_tool(server, settings=app_settings)
     register_client_recognition_tool(server, settings=app_settings)
     register_appointment_tool(server, settings=app_settings)
-    register_products_services_tools(server, settings=app_settings)
 
     return server
 
