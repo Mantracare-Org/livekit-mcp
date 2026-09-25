@@ -20,6 +20,7 @@ from livekit_mcp.tools.appointments import register_appointment_tool
 from livekit_mcp.tools.client_recognition import register_client_recognition_tool
 from livekit_mcp.tools.doctor_availability import register_doctor_availability_tool
 from livekit_mcp.tools.org_processes import register_org_processes_tool
+from livekit_mcp.tools.products_services import register_products_services_locations_tools
 from livekit_mcp.tools.providers import register_provider_tools
 from livekit_mcp.utils.db_logger import save_mcp_event
 
@@ -56,6 +57,7 @@ def create_mcp_server(settings: Settings | None = None) -> FastMCP:
     register_doctor_availability_tool(server, settings=app_settings)
     register_client_recognition_tool(server, settings=app_settings)
     register_appointment_tool(server, settings=app_settings)
+    register_products_services_locations_tools(server, settings=app_settings)
 
     return server
 

@@ -1,6 +1,7 @@
 import json
 import logging
 from typing import Any
+import urllib.parse
 
 import httpx
 
@@ -23,41 +24,44 @@ class MantraAssistBackendClient:
         phone_number: str,
         timeout: float = 3.0,
     ) -> dict[str, Any] | None:
-        """Resolve an inbound caller name through the MA client recognition endpoint.
+        """Resolve an inbound caller name through the MA client recognition / lead endpoint.
 
-        Contract: POST /v1/webhooks/client-recognition with org_id and phone_number.
-        Expected response: {"client_name": "...", "user_id": } or null fields.
+        Contract: GET /v1/webhooks/mcp/lead?org_id={org_id}&phone_number={phone_number}
+        Expected response: {"success": true, "data": {"client_name": "...", "client_metadata": {...}}}
         """
-        url = f"{self.base_url}/v1/webhooks/client-recognition"
-        payload = {
-            "org_id": str(org_id),
-            "phone_number": str(phone_number).strip(),
-        }
+        clean_phone = str(phone_number).strip()
+        encoded_phone = urllib.parse.quote(clean_phone)
+        url = f"{self.base_url}/v1/webhooks/mcp/lead?org_id={org_id}&phone_number={encoded_phone}"
         headers = {"ngrok-skip-browser-warning": "69420"}
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                if response.status_code != 200:
-                    logger.warning(
-                        "Client recognition backend returned HTTP %d: %s",
-                        response.status_code,
-                        response.text[:200],
-                    )
-                    return None
+                response = await client.get(url, headers=headers)
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, dict) and data.get("data"):
+                        lead_data = data["data"]
+                        return {
+                            "client_name": lead_data.get("client_name"),
+                            "client_metadata": lead_data.get("client_metadata") or {},
+                            "user_id": lead_data.get("user_id"),
+                        }
 
-                data = response.json()
-                if not isinstance(data, dict):
-                    return None
-                if isinstance(data.get("data"), dict):
-                    data = data["data"]
-                return {
-                    "client_name": data.get("client_name"),
-                    "user_id": data.get("user_id"),
-                }
+                # Fallback to POST /v1/webhooks/client-recognition if mcp/lead returned non-200
+                post_url = f"{self.base_url}/v1/webhooks/client-recognition"
+                post_resp = await client.post(post_url, json={"org_id": str(org_id), "phone_number": clean_phone}, headers=headers)
+                if post_resp.status_code == 200:
+                    pdata = post_resp.json()
+                    if isinstance(pdata.get("data"), dict):
+                        pdata = pdata["data"]
+                    return {
+                        "client_name": pdata.get("client_name"),
+                        "client_metadata": pdata.get("client_metadata") or {},
+                        "user_id": pdata.get("user_id"),
+                    }
         except Exception as error:
             logger.warning("Client recognition backend request failed: %s", error)
-            return None
+        return None
 
     async def get_doctor_availability(
         self,
@@ -340,11 +344,12 @@ class MantraAssistBackendClient:
                 return [data]
         return []
 
-    async def get_org_products_services(self, org_id: int | str, timeout: float = 4.0) -> list[dict[str, Any]]:
-        """Fetch dynamic products and services for an organization from MantraAssist backend API."""
+    async def get_org_services(self, org_id: int | str, timeout: float = 4.0) -> list[dict[str, Any]]:
+        """Fetch dynamic services for an organization from MantraAssist backend API endpoint GET /v1/webhooks/mcp/services."""
         urls = [
-            f"{self.base_url}/v1/webhooks/mcp/products",
-            f"{self.base_url}/v1/products",
+            f"{self.base_url}/v1/webhooks/mcp/services",
+            f"{self.base_url}/webhooks/mcp/services",
+            f"{self.base_url}/v1/services",
         ]
         params = {"org_id": str(org_id).strip()}
         headers = {"ngrok-skip-browser-warning": "69420"}
@@ -355,26 +360,38 @@ class MantraAssistBackendClient:
                     resp = await client.get(url, params=params, headers=headers)
                     if resp.status_code == 200:
                         data = resp.json()
-                        if isinstance(data, dict) and "products" in data:
-                            return data["products"]
-                        if isinstance(data, dict) and "products_services" in data:
-                            return data["products_services"]
-                        if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
-                            return data["data"]
-                        if isinstance(data, list):
+                        if isinstance(data, dict):
+                            data_obj = data.get("data") if isinstance(data.get("data"), dict) else data
+                            if isinstance(data_obj, dict) and "services" in data_obj and isinstance(data_obj["services"], list):
+                                return data_obj["services"]
+                            if isinstance(data_obj, list):
+                                return data_obj
+                        elif isinstance(data, list):
                             return data
             except Exception as exc:
-                logger.debug(f"[MA-BACKEND] Failed querying products at {url}: {exc}")
+                logger.debug(f"[MA-BACKEND] Failed querying services at {url}: {exc}")
 
         return []
 
-    async def get_org_locations(self, org_id: int | str, timeout: float = 4.0) -> list[dict[str, Any]]:
-        """Fetch dynamic hospital/clinic branch locations for an organization from MantraAssist backend API."""
+    async def get_org_locations(
+        self,
+        org_id: int | str,
+        caller_lat: float | str | None = None,
+        caller_lng: float | str | None = None,
+        timeout: float = 4.0,
+    ) -> list[dict[str, Any]]:
+        """Fetch dynamic hospital/clinic branch locations for an organization from GET /v1/webhooks/mcp/locations."""
         urls = [
             f"{self.base_url}/v1/webhooks/mcp/locations",
+            f"{self.base_url}/webhooks/mcp/locations",
             f"{self.base_url}/v1/locations",
         ]
-        params = {"org_id": str(org_id).strip()}
+        params: dict[str, str] = {"org_id": str(org_id).strip()}
+        if caller_lat is not None:
+            params["caller_lat"] = str(caller_lat)
+        if caller_lng is not None:
+            params["caller_lng"] = str(caller_lng)
+
         headers = {"ngrok-skip-browser-warning": "69420"}
 
         for url in urls:
@@ -383,11 +400,13 @@ class MantraAssistBackendClient:
                     resp = await client.get(url, params=params, headers=headers)
                     if resp.status_code == 200:
                         data = resp.json()
-                        if isinstance(data, dict) and "locations" in data:
-                            return data["locations"]
-                        if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
-                            return data["data"]
-                        if isinstance(data, list):
+                        if isinstance(data, dict):
+                            data_obj = data.get("data") if isinstance(data.get("data"), dict) else data
+                            if isinstance(data_obj, dict) and "locations" in data_obj and isinstance(data_obj["locations"], list):
+                                return data_obj["locations"]
+                            if isinstance(data_obj, list):
+                                return data_obj
+                        elif isinstance(data, list):
                             return data
             except Exception as exc:
                 logger.debug(f"[MA-BACKEND] Failed querying locations at {url}: {exc}")
