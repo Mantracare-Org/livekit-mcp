@@ -2,6 +2,13 @@
 
 All notable changes to the `livekit-mcp` project are documented in this file.
 
+## [0.3.3] - 2026-09-07
+
+### Added
+
+- **Inbound Client Recognition Tool (`recognize_client`)**: Added an MCP tool that normalizes an inbound phone number, sends `org_id` and the E.164-style number to `POST /api/v1/webhooks/client-recognition`, and returns `client_name` or `null` for anonymous callers.
+- **Bounded Backend Lookup**: Client recognition uses a three-second backend timeout and fails open so inbound calls are not blocked when the backend is unavailable.
+
 ## [0.3.2] - 2026-09-01
 
 ### Fixed

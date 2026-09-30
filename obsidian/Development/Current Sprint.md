@@ -4,6 +4,10 @@
 > **Last Updated:** 2026-08-29  
 > **Status:** Active
 
+- [x] **Inbound Client Recognition MCP Tool (2026-09-07):** Added `recognize_client` to normalize the inbound caller number and query the MA backend with `org_id` plus phone number. The livekit agent calls this tool before greeting and treats `null`, timeout, or backend failure as an anonymous caller. Backend endpoint contract: `POST /api/v1/webhooks/client-recognition`.
+
+- [x] **Appointment Management MCP Tool (2026-09-11):** Added `manage_appointments` with `list`, `availability`, `cancel`, and `reschedule` actions for recognized clients. Uses provisional backend route `/v1/webhooks/appointments`, isolated in `MantraAssistBackendClient.manage_appointments()` for later replacement.
+
 - [x] **Production Docker Build & Exec Fix (2026-09-01):** Resolved `exec /app/.venv/bin/livekit-mcp: no such file or directory` by enforcing `UV_PYTHON=/usr/local/bin/python3.12` in `Dockerfile`. Added `docker-compose.yml` with `env_file: .env` and fixed `DATABASE_URL` format.
 - [x] **Production Environment Config (2026-08-30):** Created dedicated production environment file `.env.prod` with `ENVIRONMENT=production`, secure JWT secret configuration, and production service URLs. Files: `.env.prod`.
 - [x] **Production Multi-Stage Dockerfile (2026-08-29):** Created production Dockerfile using `ghcr.io/astral-sh/uv:python3.12-bookworm-slim`, unprivileged `appuser` (UID 10001), layer caching, runtime healthcheck, and direct binary CMD execution. Files: `Dockerfile`.
