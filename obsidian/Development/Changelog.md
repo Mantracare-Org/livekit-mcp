@@ -2,6 +2,12 @@
 
 All notable changes to the `livekit-mcp` project are documented in this file.
 
+## [0.3.4] - 2026-10-16
+
+### Changed
+
+- **MantraAssist Backend HMAC-SHA256 Signing**: Updated `create_hmac_headers` in `src/livekit_mcp/utils/hmac_signing.py` and `_signed_get` / `_signed_post` in `src/livekit_mcp/clients/backend_client.py` to match the 4-part signature contract expected by `mcp.middleware.ts` (`METHOD.originalUrl.payloadString.timestamp`). GET requests preserve full wire query parameters extracted via `httpx.URL.raw_path` and use an empty string payload.
+
 ## [0.3.3] - 2026-09-07
 
 ### Added

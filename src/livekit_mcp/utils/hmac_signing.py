@@ -8,15 +8,19 @@ from livekit_mcp.config import get_settings
 
 
 def create_hmac_headers(
-    payload_str: str,
+    method: str = "GET",
+    original_url: str = "/",
+    payload_str: str = "",
     webhook_secret: str | None = None,
 ) -> dict[str, str]:
     """
     Create HMAC-signed headers for requests to MantraAssist backend.
-    Matches the signature format used by livekit's deliver_signed_payload function.
+    Matches the backend signature format: METHOD.originalUrl.payloadString.timestamp
 
     Args:
-        payload_str: The JSON payload string to sign
+        method: HTTP method in uppercase (GET, POST, etc.)
+        original_url: The path and query string (e.g. /v1/webhooks/mcp/locations?org_id=153)
+        payload_str: Raw body string (empty string for GET)
         webhook_secret: Optional override for the webhook secret (uses settings if not provided)
 
     Returns:
@@ -36,11 +40,15 @@ def create_hmac_headers(
     }
 
     if secret:
-        data_to_sign = f"{payload_str}.{timestamp}"
+        clean_method = method.upper()
+        clean_url = original_url if original_url.startswith("/") else f"/{original_url}"
+        clean_payload = payload_str if clean_method != "GET" else ""
+
+        data_to_sign = f"{clean_method}.{clean_url}.{clean_payload}.{timestamp}"
         headers["x-signature"] = hmac.new(
             secret.encode("utf-8"),
             data_to_sign.encode("utf-8"),
-            hashlib.sha256
+            hashlib.sha256,
         ).hexdigest()
 
     return headers
@@ -48,7 +56,7 @@ def create_hmac_headers(
 
 async def deliver_signed_request(
     url: str,
-    payload: dict,
+    payload: dict | None = None,
     method: str = "POST",
     webhook_secret: str | None = None,
     max_retries: int = 3,
@@ -60,7 +68,7 @@ async def deliver_signed_request(
 
     Args:
         url: Target URL
-        payload: Request payload as dict
+        payload: Request payload as dict (query params for GET, json body for POST)
         method: HTTP method (GET, POST, etc.)
         webhook_secret: Optional override for webhook secret
         max_retries: Maximum retry attempts
@@ -69,26 +77,41 @@ async def deliver_signed_request(
     Returns:
         Tuple of (success, http_status, attempts_made, error_message)
     """
+    import asyncio
     import httpx
 
     settings = get_settings()
     secret = webhook_secret or settings.mantraassist_webhook_secret or ""
 
-    payload_str = json.dumps(payload, separators=(',', ':'))
+    clean_method = method.upper()
+    u = httpx.URL(url)
+
+    if clean_method == "GET":
+        if payload:
+            u = u.copy_merge_params(payload)
+        original_url = u.raw_path.decode("ascii")
+        payload_str = ""
+    else:
+        original_url = u.raw_path.decode("ascii")
+        payload_str = json.dumps(payload or {}, separators=(',', ':'))
 
     last_error = ""
     last_status: int | None = None
 
     for attempt in range(1, max_retries + 1):
-        headers = create_hmac_headers(payload_str, secret)
+        headers = create_hmac_headers(
+            method=clean_method,
+            original_url=original_url,
+            payload_str=payload_str,
+            webhook_secret=secret,
+        )
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                if method.upper() == "GET":
-                    # For GET, send payload as query params
-                    resp = await client.get(url, params=payload, headers=headers)
+                if clean_method == "GET":
+                    resp = await client.get(u, headers=headers)
                 else:
-                    resp = await client.request(method, url, content=payload_str, headers=headers)
+                    resp = await client.request(clean_method, u, content=payload_str, headers=headers)
 
                 resp.raise_for_status()
                 return True, resp.status_code, attempt, ""
@@ -98,7 +121,6 @@ async def deliver_signed_request(
             last_status = getattr(getattr(e, "response", None), "status_code", None)
 
         if attempt < max_retries:
-            import asyncio
             await asyncio.sleep(2 ** (attempt - 1))
 
     return False, last_status, max_retries, last_error

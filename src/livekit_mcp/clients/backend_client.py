@@ -25,14 +25,21 @@ class MantraAssistBackendClient:
 
     async def _signed_get(self, url: str, params: dict[str, Any], timeout: float) -> tuple[bool, Any]:
         """Make a signed GET request with HMAC."""
-        payload_str = json.dumps(params, separators=(',', ':'))
-        headers = {**self._base_headers(), **create_hmac_headers(payload_str)}
+        u = httpx.URL(url)
+        if params:
+            u = u.copy_merge_params(params)
+        original_url = u.raw_path.decode("ascii")
+
+        headers = {
+            **self._base_headers(),
+            **create_hmac_headers(method="GET", original_url=original_url, payload_str=""),
+        }
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.get(url, params=params, headers=headers)
+                resp = await client.get(u, headers=headers)
                 if resp.status_code == 200:
                     return True, resp.json()
-                logger.warning("Signed GET %s returned HTTP %d: %s", url, resp.status_code, resp.text[:200])
+                logger.warning("Signed GET %s returned HTTP %d: %s", original_url, resp.status_code, resp.text[:200])
                 return False, None
         except Exception as e:
             logger.error("Signed GET %s failed: %s", url, e)
@@ -40,14 +47,20 @@ class MantraAssistBackendClient:
 
     async def _signed_post(self, url: str, payload: dict[str, Any], timeout: float) -> tuple[bool, Any]:
         """Make a signed POST request with HMAC."""
+        u = httpx.URL(url)
+        original_url = u.raw_path.decode("ascii")
         payload_str = json.dumps(payload, separators=(',', ':'))
-        headers = {**self._base_headers(), **create_hmac_headers(payload_str)}
+
+        headers = {
+            **self._base_headers(),
+            **create_hmac_headers(method="POST", original_url=original_url, payload_str=payload_str),
+        }
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(url, content=payload_str, headers=headers)
+                resp = await client.post(u, content=payload_str, headers=headers)
                 if resp.status_code == 200:
                     return True, resp.json()
-                logger.warning("Signed POST %s returned HTTP %d: %s", url, resp.status_code, resp.text[:200])
+                logger.warning("Signed POST %s returned HTTP %d: %s", original_url, resp.status_code, resp.text[:200])
                 return False, None
         except Exception as e:
             logger.error("Signed POST %s failed: %s", url, e)
