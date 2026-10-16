@@ -1,8 +1,10 @@
 # Current Sprint
 
 > **Sprint:** 0.3.0 Production Dockerization & Org Processes Integration  
-> **Last Updated:** 2026-08-29  
+> **Last Updated:** 2026-10-16  
 > **Status:** Active
+
+- [x] **Backend HMAC-SHA256 Signing Alignment (2026-10-16):** Updated outbound request signing in `src/livekit_mcp/utils/hmac_signing.py` and `src/livekit_mcp/clients/backend_client.py` to match MantraAssist backend's `generateMcpSignature` contract (`METHOD.originalUrl.payloadString.timestamp`). GET requests leave payload empty and preserve exact wire URL query parameters via `httpx.URL.raw_path`.
 
 - [x] **Inbound Client Recognition MCP Tool (2026-09-07):** Added `recognize_client` to normalize the inbound caller number and query the MA backend with `org_id` plus phone number. The livekit agent calls this tool before greeting and treats `null`, timeout, or backend failure as an anonymous caller. Backend endpoint contract: `POST /api/v1/webhooks/client-recognition`.
 

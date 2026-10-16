@@ -48,6 +48,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="MANTRAASSIST_CLIENT_SECRET",
     )
+    mantraassist_webhook_secret: str | None = Field(
+        default=None,
+        validation_alias="MANTRAASSIST_WEBHOOK_SECRET",
+    )
 
     # PostgreSQL Database (mcp_logs_db / assist_db)
     database_url: str = Field(

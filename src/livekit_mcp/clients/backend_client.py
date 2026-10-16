@@ -1,11 +1,12 @@
 import json
 import logging
-from typing import Any
 import urllib.parse
+from typing import Any
 
 import httpx
 
 from livekit_mcp.config import Settings, get_settings
+from livekit_mcp.utils.hmac_signing import create_hmac_headers
 from livekit_mcp.utils.timezone import resolve_date_string, to_utc_iso_string
 
 logger = logging.getLogger(__name__)
@@ -17,6 +18,53 @@ class MantraAssistBackendClient:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self.base_url = self.settings.mantraassist_backend_url.rstrip("/")
+
+    def _base_headers(self) -> dict[str, str]:
+        """Base headers for all requests."""
+        return {"ngrok-skip-browser-warning": "69420"}
+
+    async def _signed_get(self, url: str, params: dict[str, Any], timeout: float) -> tuple[bool, Any]:
+        """Make a signed GET request with HMAC."""
+        u = httpx.URL(url)
+        if params:
+            u = u.copy_merge_params(params)
+        original_url = u.raw_path.decode("ascii")
+
+        headers = {
+            **self._base_headers(),
+            **create_hmac_headers(method="GET", original_url=original_url, payload_str=""),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(u, headers=headers)
+                if resp.status_code == 200:
+                    return True, resp.json()
+                logger.warning("Signed GET %s returned HTTP %d: %s", original_url, resp.status_code, resp.text[:200])
+                return False, None
+        except Exception as e:
+            logger.error("Signed GET %s failed: %s", url, e)
+            return False, None
+
+    async def _signed_post(self, url: str, payload: dict[str, Any], timeout: float) -> tuple[bool, Any]:
+        """Make a signed POST request with HMAC."""
+        u = httpx.URL(url)
+        original_url = u.raw_path.decode("ascii")
+        payload_str = json.dumps(payload, separators=(',', ':'))
+
+        headers = {
+            **self._base_headers(),
+            **create_hmac_headers(method="POST", original_url=original_url, payload_str=payload_str),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(u, content=payload_str, headers=headers)
+                if resp.status_code == 200:
+                    return True, resp.json()
+                logger.warning("Signed POST %s returned HTTP %d: %s", original_url, resp.status_code, resp.text[:200])
+                return False, None
+        except Exception as e:
+            logger.error("Signed POST %s failed: %s", url, e)
+            return False, None
 
     async def recognize_client(
         self,
@@ -32,35 +80,28 @@ class MantraAssistBackendClient:
         clean_phone = str(phone_number).strip()
         encoded_phone = urllib.parse.quote(clean_phone)
         url = f"{self.base_url}/v1/webhooks/mcp/lead?org_id={org_id}&phone_number={encoded_phone}"
-        headers = {"ngrok-skip-browser-warning": "69420"}
 
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.get(url, headers=headers)
-                if response.status_code == 200:
-                    data = response.json()
-                    if isinstance(data, dict) and data.get("data"):
-                        lead_data = data["data"]
-                        return {
-                            "client_name": lead_data.get("client_name"),
-                            "client_metadata": lead_data.get("client_metadata") or {},
-                            "user_id": lead_data.get("user_id"),
-                        }
+        # First try signed GET
+        ok, data = await self._signed_get(url, {}, timeout)
+        if ok and isinstance(data, dict) and data.get("data"):
+            lead_data = data["data"]
+            return {
+                "client_name": lead_data.get("client_name"),
+                "client_metadata": lead_data.get("client_metadata") or {},
+                "user_id": lead_data.get("user_id"),
+            }
 
-                # Fallback to POST /v1/webhooks/client-recognition if mcp/lead returned non-200
-                post_url = f"{self.base_url}/v1/webhooks/client-recognition"
-                post_resp = await client.post(post_url, json={"org_id": str(org_id), "phone_number": clean_phone}, headers=headers)
-                if post_resp.status_code == 200:
-                    pdata = post_resp.json()
-                    if isinstance(pdata.get("data"), dict):
-                        pdata = pdata["data"]
-                    return {
-                        "client_name": pdata.get("client_name"),
-                        "client_metadata": pdata.get("client_metadata") or {},
-                        "user_id": pdata.get("user_id"),
-                    }
-        except Exception as error:
-            logger.warning("Client recognition backend request failed: %s", error)
+        # Fallback to POST /v1/webhooks/client-recognition
+        post_url = f"{self.base_url}/v1/webhooks/client-recognition"
+        ok, pdata = await self._signed_post(post_url, {"org_id": str(org_id), "phone_number": clean_phone}, timeout)
+        if ok and isinstance(pdata, dict):
+            if isinstance(pdata.get("data"), dict):
+                pdata = pdata["data"]
+            return {
+                "client_name": pdata.get("client_name"),
+                "client_metadata": pdata.get("client_metadata") or {},
+                "user_id": pdata.get("user_id"),
+            }
         return None
 
     async def get_doctor_availability(
@@ -113,36 +154,18 @@ class MantraAssistBackendClient:
         if caller_phone:
             params["caller_phone"] = str(caller_phone).strip()
 
-        headers: dict[str, str] = {
-            "ngrok-skip-browser-warning": "69420",
-        }
+        # 1. Try signed GET request first
+        ok, data = await self._signed_get(url, params, timeout)
+        if ok:
+            return self._extract_providers(data)
 
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                # 1. Try GET request first (standard query format for backend availability)
-                logger.info("Querying MantraAssist backend GET %s with UTC params %s", url, params)
-                resp = await client.get(url, params=params, headers=headers)
+        # 2. Try signed POST request fallback
+        logger.info("Retrying with signed POST %s", url)
+        ok, data = await self._signed_post(url, params, timeout)
+        if ok:
+            return self._extract_providers(data)
 
-                if resp.status_code == 200:
-                    data = resp.json()
-                    return self._extract_providers(data)
-
-                # 2. Try POST request fallback if GET returns 404/405
-                if resp.status_code in (404, 405):
-                    logger.info("Retrying with POST %s", url)
-                    post_resp = await client.post(url, json=params, headers=headers)
-                    if post_resp.status_code == 200:
-                        data = post_resp.json()
-                        return self._extract_providers(data)
-
-                logger.warning(
-                    "MantraAssist backend returned HTTP %d: %s",
-                    resp.status_code,
-                    resp.text[:200],
-                )
-        except Exception as e:
-            logger.error("Failed to connect to MantraAssist backend at %s: %s", url, e)
-
+        logger.warning("MantraAssist backend returned non-200 for both GET and POST")
         return None
 
     async def manage_appointments(
@@ -177,24 +200,11 @@ class MantraAssistBackendClient:
         if new_datetime:
             payload["new_datetime"] = new_datetime.strip()
 
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(
-                    url,
-                    json=payload,
-                    headers={"ngrok-skip-browser-warning": "69420"},
-                )
-                if response.status_code != 200:
-                    logger.warning(
-                        "Appointment backend returned HTTP %d: %s",
-                        response.status_code,
-                        response.text[:300],
-                    )
-                    return {"status": "error", "message": response.text[:300]}
-                return response.json()
-        except Exception as error:
-            logger.warning("Appointment backend request failed: %s", error)
-            return {"status": "error", "message": str(error)}
+        ok, data = await self._signed_post(url, payload, timeout)
+        if not ok:
+            logger.warning("Appointment backend returned non-200")
+            return {"status": "error", "message": "Request failed"}
+        return data
 
     # In-memory temporary cache: org_id -> (timestamp, data)
     _processes_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
@@ -228,25 +238,17 @@ class MantraAssistBackendClient:
             f"{self.base_url}/v1/webhooks/mcp",
         ]
 
-        headers: dict[str, str] = {
-            "ngrok-skip-browser-warning": "69420",
-        }
-
         params = {"org_id": org_id_str}
 
         for url in urls:
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    logger.info("[MA-BACKEND] Requesting Org Processes: GET %s | Params: %s | Headers: %s", url, params, headers)
-                    resp = await client.get(url, params=params, headers=headers)
-                    logger.info("[MA-BACKEND] Response HTTP %d from %s | Raw Payload: %s", resp.status_code, url, resp.text[:2000])
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        extracted = self._extract_processes(data)
-                        logger.info("[MA-BACKEND] Extracted %d normalized processes: %s", len(extracted), json.dumps(extracted, default=str))
-                        if extracted:
-                            self._processes_cache[org_id_str] = (now, extracted)
-                            return extracted
+                ok, data = await self._signed_get(url, params, timeout)
+                if ok:
+                    extracted = self._extract_processes(data)
+                    logger.info("[MA-BACKEND] Extracted %d normalized processes: %s", len(extracted), json.dumps(extracted, default=str))
+                    if extracted:
+                        self._processes_cache[org_id_str] = (now, extracted)
+                        return extracted
             except Exception as e:
                 logger.warning("[MA-BACKEND] Failed querying processes at %s: %s", url, e)
 
@@ -352,22 +354,19 @@ class MantraAssistBackendClient:
             f"{self.base_url}/v1/services",
         ]
         params = {"org_id": str(org_id).strip()}
-        headers = {"ngrok-skip-browser-warning": "69420"}
 
         for url in urls:
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    resp = await client.get(url, params=params, headers=headers)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if isinstance(data, dict):
-                            data_obj = data.get("data") if isinstance(data.get("data"), dict) else data
-                            if isinstance(data_obj, dict) and "services" in data_obj and isinstance(data_obj["services"], list):
-                                return data_obj["services"]
-                            if isinstance(data_obj, list):
-                                return data_obj
-                        elif isinstance(data, list):
-                            return data
+                ok, data = await self._signed_get(url, params, timeout)
+                if ok:
+                    if isinstance(data, dict):
+                        data_obj = data.get("data") if isinstance(data.get("data"), dict) else data
+                        if isinstance(data_obj, dict) and "services" in data_obj and isinstance(data_obj["services"], list):
+                            return data_obj["services"]
+                        if isinstance(data_obj, list):
+                            return data_obj
+                    elif isinstance(data, list):
+                        return data
             except Exception as exc:
                 logger.debug(f"[MA-BACKEND] Failed querying services at {url}: {exc}")
 
@@ -392,22 +391,18 @@ class MantraAssistBackendClient:
         if caller_lng is not None:
             params["caller_lng"] = str(caller_lng)
 
-        headers = {"ngrok-skip-browser-warning": "69420"}
-
         for url in urls:
             try:
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    resp = await client.get(url, params=params, headers=headers)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        if isinstance(data, dict):
-                            data_obj = data.get("data") if isinstance(data.get("data"), dict) else data
-                            if isinstance(data_obj, dict) and "locations" in data_obj and isinstance(data_obj["locations"], list):
-                                return data_obj["locations"]
-                            if isinstance(data_obj, list):
-                                return data_obj
-                        elif isinstance(data, list):
-                            return data
+                ok, data = await self._signed_get(url, params, timeout)
+                if ok:
+                    if isinstance(data, dict):
+                        data_obj = data.get("data") if isinstance(data.get("data"), dict) else data
+                        if isinstance(data_obj, dict) and "locations" in data_obj and isinstance(data_obj["locations"], list):
+                            return data_obj["locations"]
+                        if isinstance(data_obj, list):
+                            return data_obj
+                    elif isinstance(data, list):
+                        return data
             except Exception as exc:
                 logger.debug(f"[MA-BACKEND] Failed querying locations at {url}: {exc}")
 
